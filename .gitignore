@@ -1,0 +1,45 @@
+# macOS and editor files
+.DS_Store
+*.swp
+*.swo
+.idea/
+.vscode/
+
+# Python
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ruff_cache/
+
+# Local configuration and logs
+.env
+.env.*
+!.env.example
+*.log
+
+# Source and proxy media must never be committed.
+*.wav
+*.wave
+*.mp3
+*.aac
+*.m4a
+*.flac
+*.aif
+*.aiff
+*.caf
+*.mp4
+*.mov
+*.mxf
+*.crdownload
+
+# DAW sessions and caches
+*.ptx
+WaveCache.wfm
+
+# Generated analysis, proxy, and experiment artifacts
+/web/assets/
+/analysis_outputs/
+/experiments/
+/미우새/

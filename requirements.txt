@@ -1,0 +1,5 @@
+matplotlib==3.11.1
+numpy==2.5.0
+scipy==1.18.0
+soundfile==0.14.0
+ssspy==0.2.0

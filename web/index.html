@@ -1,0 +1,243 @@
+<!doctype html>
+<html lang="ko">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>APPA Multitrack Gate Lab</title>
+    <link rel="stylesheet" href="./styles.css?v=20260715-2" />
+  </head>
+  <body>
+    <main class="app-shell">
+      <section class="topbar">
+        <div>
+          <h1>APPA Multitrack Gate Lab</h1>
+          <p id="sessionSubtitle">새 세션을 시작하려면 여러 오디오 파일을 선택하세요.</p>
+          <p class="interaction-hint">파일 로드 후 파형 클릭: 해당 지점부터 재생 · 드래그: 구간 선택</p>
+        </div>
+        <div class="transport">
+          <button id="loadFilesButton" type="button">Load Files</button>
+          <button id="loadProjectButton" type="button">Load Project</button>
+          <button id="playPause" class="primary" type="button">Play</button>
+          <button id="stop" type="button">Stop</button>
+          <button id="loop" type="button" aria-pressed="false">Loop</button>
+          <div class="scale-control" aria-label="Waveform horizontal zoom">
+            <button id="zoomOut" type="button" aria-label="Zoom out">-</button>
+            <label>
+              Zoom
+              <input id="zoom" type="range" min="1" max="240" step="1" value="3" />
+            </label>
+            <button id="zoomIn" type="button" aria-label="Zoom in">+</button>
+            <output id="zoomValue" for="zoom">3x</output>
+          </div>
+          <div class="scale-control" aria-label="Waveform vertical scale">
+            <label>
+              Height
+              <input id="waveGain" type="range" min="1" max="8" step="1" value="3" />
+            </label>
+            <output id="waveGainValue" for="waveGain">3x</output>
+          </div>
+        </div>
+      </section>
+
+      <input id="audioFileInput" type="file" accept="audio/*" multiple hidden />
+
+      <section id="timelineWindowBar" class="timeline-window-bar" hidden>
+        <div>
+          <span class="label">Timeline Window</span>
+          <strong id="timelineWindowReadout">00:00:00.000 - 00:20:00.000</strong>
+        </div>
+        <div class="timeline-window-actions">
+          <button id="prevTimelineWindow" type="button">Prev 20m</button>
+          <button id="nextTimelineWindow" type="button">Next 20m</button>
+        </div>
+      </section>
+
+      <section class="status-row">
+        <div>
+          <span class="label">Time</span>
+          <strong id="timecode">00:00:00.000</strong>
+        </div>
+        <div>
+          <span class="label">Duration</span>
+          <strong id="duration">--:--:--.---</strong>
+        </div>
+        <div>
+          <span class="label">Selection</span>
+          <strong id="selectionReadout">none</strong>
+        </div>
+        <div>
+          <span class="label">Mode</span>
+          <strong>Manual segments</strong>
+        </div>
+      </section>
+
+      <section id="loaderPanel" class="loader-panel" role="dialog" aria-modal="true" aria-labelledby="loaderTitle">
+        <div class="loader-card">
+          <span class="label">New Session</span>
+          <h2 id="loaderTitle">Load Multitrack Audio</h2>
+          <p>
+            여러 개의 원본 음성 파일을 선택하면 proxy와 waveform을 먼저 로드합니다.
+            BSS 분석은 필요한 구간을 선택한 뒤 버튼으로 실행하고 캐시로 재사용합니다.
+          </p>
+          <div class="loader-actions">
+            <button id="chooseAudioFiles" class="primary" type="button">Choose Audio Files</button>
+            <button id="loadProjectSession" type="button">Load Project Session</button>
+            <span id="selectedFileHint">2개 이상의 동기화된 트랙을 권장합니다.</span>
+          </div>
+          <div class="analysis-progress">
+            <div id="analysisProgressBar"></div>
+          </div>
+          <p id="analysisStatus" class="panel-note">아직 로드된 세션이 없습니다.</p>
+        </div>
+      </section>
+
+      <section id="workspace" class="workspace" hidden>
+        <div class="timeline-panel">
+          <div id="loading" class="loading">Loading audio previews and waveforms...</div>
+          <div id="timeline" class="timeline" aria-label="multitrack timeline"></div>
+        </div>
+
+        <aside class="inspector">
+          <div class="panel">
+            <h2>Tracks</h2>
+            <div id="trackControls" class="track-controls"></div>
+          </div>
+
+          <div class="panel">
+            <h2>Segments</h2>
+            <div class="segment-actions">
+              <button id="createSegment" type="button">Create From Selection</button>
+              <button id="clearSelection" type="button">Clear Selection</button>
+            </div>
+            <div id="segmentList" class="segment-list"></div>
+          </div>
+
+          <div class="panel">
+            <h2>Activity Analysis</h2>
+            <label class="field-label">
+              Algorithm
+              <select id="bssAlgorithm" disabled></select>
+            </label>
+            <div class="analysis-range-control">
+              <span class="label">Gate Range</span>
+              <div class="analysis-range-actions">
+                <button id="analysisRangeFull" type="button" disabled>Full</button>
+                <button id="analysisRangeFirst20" type="button" disabled>First 20m</button>
+                <button id="analysisRangeSelection" type="button" disabled>Use Selection</button>
+              </div>
+              <output id="analysisRangeValue" class="range-output">Full timeline</output>
+            </div>
+            <label class="toggle analysis-step-toggle">
+              <input id="activityScoringEnabled" type="checkbox" checked disabled />
+              1. Use activity score frames
+            </label>
+            <label class="toggle analysis-step-toggle">
+              <input id="thresholdGateEnabled" type="checkbox" checked disabled />
+              2. Threshold candidates
+            </label>
+            <label class="field-label sub-control">
+              Threshold
+              <input id="activityThreshold" type="range" min="0.1" max="0.95" step="0.05" value="0.7" disabled />
+            </label>
+            <output id="activityThresholdValue" class="range-output" for="activityThreshold">0.70</output>
+            <label class="field-label sub-control">
+              Winner Margin
+              <input id="dominanceMargin" type="range" min="0" max="0.5" step="0.01" value="0.15" disabled />
+            </label>
+            <output id="dominanceMarginValue" class="range-output" for="dominanceMargin">0.15</output>
+            <label class="toggle analysis-step-toggle">
+              <input id="fallbackGateEnabled" type="checkbox" checked disabled />
+              3. Fallback strongest track
+            </label>
+            <label class="field-label sub-control">
+              Fallback Min Score
+              <input id="fallbackMinScore" type="range" min="0" max="0.95" step="0.05" value="0" disabled />
+            </label>
+            <output id="fallbackMinScoreValue" class="range-output" for="fallbackMinScore">0.00</output>
+            <label class="toggle analysis-step-toggle">
+              <input id="rmsGateEnabled" type="checkbox" checked disabled />
+              4. Original RMS gate
+            </label>
+            <label class="field-label sub-control">
+              Original RMS Min
+              <input id="rmsGateThreshold" type="range" min="-80" max="-25" step="1" value="-55" disabled />
+            </label>
+            <output id="rmsGateThresholdValue" class="range-output" for="rmsGateThreshold">-55 dBFS</output>
+            <label class="toggle analysis-step-toggle">
+              <input id="smoothingEnabled" type="checkbox" checked disabled />
+              5. Smooth frame decisions
+            </label>
+            <label class="field-label sub-control">
+              Smoothing
+              <select id="smoothingMode" disabled>
+                <option value="track-mask">Track mask</option>
+                <option value="combination-runs">Combination runs</option>
+              </select>
+            </label>
+            <label class="field-label sub-control">
+              Off Gap Fill
+              <input id="offGapFill" type="range" min="0" max="5" step="0.1" value="2.0" disabled />
+            </label>
+            <output id="offGapFillValue" class="range-output" for="offGapFill">2.0s</output>
+            <label class="field-label sub-control">
+              Min On Duration
+              <input id="minOnDuration" type="range" min="0" max="2" step="0.1" value="0.6" disabled />
+            </label>
+            <output id="minOnDurationValue" class="range-output" for="minOnDuration">0.6s</output>
+            <label class="field-label">
+              Fade Duration
+              <input id="fadeDuration" type="range" min="0" max="2" step="0.1" value="0.5" disabled />
+            </label>
+            <output id="fadeDurationValue" class="range-output" for="fadeDuration">0.5s</output>
+            <label class="toggle analysis-preview-toggle">
+              <input id="autoGatePreview" type="checkbox" checked disabled />
+              Preview gates on original tracks
+            </label>
+            <div class="segment-actions analysis-actions">
+              <button id="applyAutoGates" type="button" disabled>Apply To Segments</button>
+              <button id="clearAutoGates" type="button">Clear Auto</button>
+            </div>
+            <p id="bssInspectorNote" class="panel-note">분리 결과를 불러오는 중입니다.</p>
+          </div>
+
+          <div class="panel">
+            <h2>Export</h2>
+            <button id="downloadJson" type="button">Download Segments JSON</button>
+          </div>
+        </aside>
+      </section>
+
+      <section id="bssPanel" class="bss-panel" hidden>
+        <header>
+          <div>
+            <span class="label">Analysis Output</span>
+            <h2>BSS Source Analysis</h2>
+          </div>
+          <div class="bss-panel-actions">
+            <button id="useRmsFilter" type="button">Use RMS Filter</button>
+            <button id="runBssAnalysis" type="button">Run AuxIVA</button>
+            <button id="bssPlayPause" type="button" disabled>Play BSS</button>
+            <button id="bssStop" type="button" disabled>Stop BSS</button>
+          </div>
+          <div id="activityStats" class="activity-stats">Loading activity analysis...</div>
+        </header>
+        <div id="bssSummary" class="bss-summary">Loading activity analysis...</div>
+        <div class="bss-timeline-panel">
+          <div id="bssStatus" class="loading">Loading activity analysis...</div>
+          <div id="bssTimeline" class="bss-timeline" aria-label="source activity analysis timeline"></div>
+        </div>
+      </section>
+    </main>
+
+    <script>
+      if (window.location.protocol === "file:") {
+        var loading = document.getElementById("loading");
+        if (loading) {
+          loading.innerHTML =
+            'This UI needs a local HTTP server to load audio assets. Open <a href="http://localhost:5177">http://localhost:5177</a> instead.';
+        }
+      }
+    </script>
+    <script src="./app.js?v=20260715-2" type="module"></script>
+  </body>
+</html>
