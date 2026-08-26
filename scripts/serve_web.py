@@ -15,6 +15,9 @@ from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
 
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+
+
 class RangeRequestHandler(SimpleHTTPRequestHandler):
     """Static file handler that supports HTTP Range requests.
 
@@ -23,7 +26,7 @@ class RangeRequestHandler(SimpleHTTPRequestHandler):
     """
 
     range: tuple[int, int] | None = None
-    project_root = Path(__file__).resolve().parents[1]
+    project_root = PROJECT_ROOT
 
     def python_executable(self) -> str:
         venv_python = self.project_root / ".venv" / "bin" / "python"
@@ -56,6 +59,20 @@ class RangeRequestHandler(SimpleHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(response)
 
+    def run_json_command(self, command: list[str]) -> str:
+        try:
+            result = subprocess.run(
+                command,
+                cwd=self.project_root,
+                check=True,
+                capture_output=True,
+                text=True,
+            )
+        except subprocess.CalledProcessError as error:
+            detail = (error.stderr or error.stdout or str(error)).strip()
+            raise RuntimeError(detail) from error
+        return result.stdout
+
     def handle_prepare_session(self):
         try:
             payload = self.read_json_body()
@@ -67,14 +84,7 @@ class RangeRequestHandler(SimpleHTTPRequestHandler):
             for file_name in file_names:
                 command.extend(["--file-name", str(file_name)])
 
-            result = subprocess.run(
-                command,
-                cwd=self.project_root,
-                check=True,
-                capture_output=True,
-                text=True,
-            )
-            self.send_json_response(result.stdout)
+            self.send_json_response(self.run_json_command(command))
         except Exception as error:
             self.send_json_response({"error": str(error)}, HTTPStatus.INTERNAL_SERVER_ERROR)
 
@@ -101,14 +111,7 @@ class RangeRequestHandler(SimpleHTTPRequestHandler):
                 *[str(algorithm) for algorithm in algorithms],
             ]
 
-            result = subprocess.run(
-                command,
-                cwd=self.project_root,
-                check=True,
-                capture_output=True,
-                text=True,
-            )
-            self.send_json_response(result.stdout)
+            self.send_json_response(self.run_json_command(command))
         except Exception as error:
             self.send_json_response({"error": str(error)}, HTTPStatus.INTERNAL_SERVER_ERROR)
             return
@@ -196,7 +199,10 @@ class RangeRequestHandler(SimpleHTTPRequestHandler):
             chunk = source.read(min(1024 * 1024, remaining))
             if not chunk:
                 break
-            outputfile.write(chunk)
+            try:
+                outputfile.write(chunk)
+            except (BrokenPipeError, ConnectionResetError):
+                break
             remaining -= len(chunk)
 
 
@@ -204,14 +210,25 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="Serve APPA web assets with HTTP range support.")
     parser.add_argument("--port", type=int, default=5177)
     parser.add_argument("--host", default="127.0.0.1")
-    parser.add_argument("--directory", default="web")
+    parser.add_argument("--directory", default=None)
     args = parser.parse_args()
 
-    directory = os.path.abspath(args.directory)
+    directory = Path(args.directory).expanduser() if args.directory else PROJECT_ROOT / "web"
+    if not directory.is_absolute():
+        directory = PROJECT_ROOT / directory
+    directory = directory.resolve()
+    if not directory.is_dir():
+        parser.error(f"Web directory does not exist: {directory}")
+
     handler = partial(RangeRequestHandler, directory=directory)
     server = ThreadingHTTPServer((args.host, args.port), handler)
     print(f"Serving {directory} at http://{args.host}:{args.port}/ with byte-range support", flush=True)
-    server.serve_forever()
+    try:
+        server.serve_forever()
+    except KeyboardInterrupt:
+        print("\nAPPA web server stopped.", flush=True)
+    finally:
+        server.server_close()
 
 
 if __name__ == "__main__":

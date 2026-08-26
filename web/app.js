@@ -663,16 +663,33 @@ function formatPreparedSessionStatus(manifest) {
   return `proxy ${status.proxy || "unknown"} · waveform ${status.waveform || "unknown"} · BSS ${status.analysis || "not-run"}`;
 }
 
+async function fetchServerJson(url, options, actionName) {
+  let response;
+  try {
+    response = await fetch(url, options);
+  } catch (error) {
+    throw new Error(`${actionName} 서버에 연결할 수 없습니다. serve_web.py가 실행 중인지 확인해주세요.`);
+  }
+
+  const responseText = await response.text();
+  let payload = {};
+  try {
+    payload = responseText ? JSON.parse(responseText) : {};
+  } catch (error) {
+    throw new Error(`${actionName} 서버 응답을 해석할 수 없습니다. APPA 전용 웹 서버로 접속했는지 확인해주세요.`);
+  }
+
+  if (!response.ok) throw new Error(payload.error || `${actionName} failed (${response.status})`);
+  return payload;
+}
+
 async function prepareServerSession(files = []) {
   const fileNames = files.map((file) => file.name);
-  const response = await fetch("./api/session/prepare", {
+  return fetchServerJson("./api/session/prepare", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ fileNames }),
-  });
-  const payload = await response.json();
-  if (!response.ok) throw new Error(payload.error || "Server session preparation failed");
-  return payload;
+  }, "프로젝트 준비");
 }
 
 async function loadServerTrack(track) {
@@ -766,7 +783,7 @@ function getBssAnalysisRange() {
 }
 
 async function requestBssAnalysis(range) {
-  const response = await fetch("./api/bss/analyze", {
+  return fetchServerJson("./api/bss/analyze", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
@@ -775,10 +792,7 @@ async function requestBssAnalysis(range) {
       duration: range.duration,
       algorithms: ["auxiva"],
     }),
-  });
-  const payload = await response.json();
-  if (!response.ok) throw new Error(payload.error || "BSS analysis failed");
-  return payload;
+  }, "BSS 분석");
 }
 
 async function loadBssAnalysisManifest(manifest) {

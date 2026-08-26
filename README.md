@@ -65,6 +65,18 @@ python scripts/analyze_single_wav_rms.py /absolute/path/to/input.wav \
 
 요약 JSON, 프레임/분 단위 CSV, 압축 NPZ와 RMS 분포 PNG가 생성됩니다. `analysis_outputs/`는 재생성 가능한 산출물이므로 Git에서 제외됩니다.
 
+## Pro Tools RMS 게이트 적용
+
+웹 UI와 동일한 기본 파라미터로 RMS 게이트 계획을 생성하고 PTSL로 Pro Tools 트랙에 적용할 수 있습니다. 먼저 Pro Tools에서 대상 세션을 열고 PTSL이 연결 가능한 상태인지 확인합니다.
+
+```bash
+python scripts/build_rms_gate_plan.py
+python scripts/apply_rms_gate_plan_to_protools.py
+python scripts/apply_rms_gate_plan_to_protools.py --apply
+```
+
+두 번째 명령은 세션과 적용 범위만 확인하는 dry run이며 Pro Tools를 변경하지 않습니다. `--apply` 실행 시 원본 트랙을 복제한 `APPA_PTSL_ALL` 대상 트랙을 만들고, 계산된 구간 경계로 clip을 분할한 뒤 비활성 구간을 mute합니다. 실제 세션에 적용하기 전에 `scripts/test_ptsl_clip_mute.py`로 짧은 테스트 트랙에서 PTSL 동작을 확인할 수 있습니다.
+
 ## 프로젝트 구조
 
 ```text
