@@ -1,0 +1,67 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Pro Tools RMS Gate</title>
+  <link rel="stylesheet" href="./styles.css?v=1" />
+</head>
+<body>
+  <header class="page-header">
+    <div>
+      <h1>Pro Tools RMS Gate</h1>
+      <p class="subtitle">지금 열려 있는 Pro Tools 세션의 트랙을 인식하고, RMS 기반 게이트를 미리 보고 적용합니다.</p>
+    </div>
+    <div class="header-actions">
+      <button id="recognizeBtn" type="button">1. Pro Tools 파일 인식</button>
+      <span id="sessionInfo" class="session-info"></span>
+    </div>
+  </header>
+
+  <p id="statusLine" class="status-line"></p>
+
+  <main id="mainContent" hidden>
+    <section class="panel" id="trackPanel">
+      <h2>트랙 선택</h2>
+      <div id="trackList" class="track-list"></div>
+    </section>
+
+    <section class="panel" id="paramPanel">
+      <h2>파라미터</h2>
+      <div class="param-grid" id="paramGrid"></div>
+      <details class="advanced-params">
+        <summary>고급 (퍼센타일 정규화)</summary>
+        <div class="param-grid" id="advancedParamGrid"></div>
+      </details>
+      <button id="extractBtn" type="button" class="primary-btn">2. RMS 추출</button>
+      <button id="buildPlanBtn" type="button" class="primary-btn" disabled>3. 파라미터 적용</button>
+      <button id="buildPlanTestBtn" type="button" class="small-btn" disabled title="Original RMS Min을 정규화(1단계) 이전에 적용해 무음 구간을 제외하고 계산합니다">3-2. 적용 테스트</button>
+    </section>
+
+    <section class="panel loading-panel" id="analyzeLoadingPanel" hidden>
+      <div class="ai-spinner"><span class="ai-spinner-core"></span></div>
+      <p id="loadingMessage" class="loading-message"></p>
+      <p id="loadingSub" class="loading-sub"></p>
+    </section>
+
+    <section class="panel" id="resultsPanel" hidden>
+      <h2>분석 결과</h2>
+      <div id="resultsList" class="results-list"></div>
+      <button id="applyBtn" type="button" class="primary-btn danger-btn">4. Pro Tools 적용</button>
+    </section>
+  </main>
+
+  <div id="confirmModal" class="modal-overlay" hidden>
+    <div class="modal">
+      <h2>Pro Tools에 적용할까요?</h2>
+      <div id="confirmBody"></div>
+      <div class="modal-actions">
+        <button id="confirmCancel" type="button">취소</button>
+        <button id="confirmOk" type="button" class="primary-btn danger-btn">적용</button>
+      </div>
+    </div>
+  </div>
+
+  <script src="./app.js?v=1"></script>
+</body>
+</html>

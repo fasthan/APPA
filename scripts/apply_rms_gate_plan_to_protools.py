@@ -7,11 +7,21 @@ import argparse
 import json
 from pathlib import Path
 import time
-import unicodedata
 
-from ptsl import PTSL_pb2 as pt
 from ptsl import open_engine
-from ptsl.ops.operation import Operation
+
+from appa_ptsl_ops import (
+    clear_track,
+    create_segment_clips,
+    export_track_events,
+    find_source_clip,
+    find_track,
+    get_clip_list,
+    intervals_to_segments,
+    seconds_to_samples,
+    spot_segment_clips,
+    verify_events,
+)
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -19,285 +29,6 @@ DEFAULT_PLAN = ROOT / "analysis_outputs" / "rms" / "protools_gate_plan.json"
 DEFAULT_REPORT = (
     ROOT / "analysis_outputs" / "rms" / "protools_apply_report.json"
 )
-
-
-class CId_GetClipList(Operation):
-    def json_cleanup(self, response_json: str) -> str:
-        return response_json.replace('"clip_list"', '"clips"')
-
-
-class CId_CreateAudioClips(Operation):
-    def json_messup(self, request_json: str) -> str:
-        payload = json.loads(request_json)
-        point_names = (
-            "src_start_point",
-            "src_end_point",
-            "src_sync_point",
-            "start_point",
-            "end_point",
-        )
-        for entry in payload.get("clip_list", []):
-            for clip_info in entry.get("clip_info", []):
-                for point_name in point_names:
-                    point = clip_info.get(point_name)
-                    if point and "position" in point:
-                        point["position"] = int(point["position"])
-        return json.dumps(payload)
-
-
-class CId_SpotClipsByID(Operation):
-    def json_messup(self, request_json: str) -> str:
-        payload = json.loads(request_json)
-        attributes = payload.get("clip_instance_attributes")
-        if attributes:
-            if attributes.get("color_index") == 0:
-                attributes.pop("color_index")
-            if not attributes.get("locked_states"):
-                attributes.pop("locked_states", None)
-        return json.dumps(payload)
-
-
-def normalize_name(value: str) -> str:
-    return unicodedata.normalize("NFC", value).casefold()
-
-
-def seconds_to_samples(seconds: float, sample_rate: int) -> int:
-    return int(round(seconds * sample_rate))
-
-
-def media_position(samples: int):
-    return pt.MediaTimePosition(
-        position=samples,
-        time_type=pt.BTType_Samples,
-    )
-
-
-def timeline_location(samples: int):
-    return pt.TimelineLocation(
-        location=str(samples),
-        time_type=pt.TLType_Samples,
-    )
-
-
-def get_clip_list(engine):
-    operation = CId_GetClipList(
-        pagination_request=pt.PaginationRequest(limit=10000, offset=0)
-    )
-    engine.client.run(operation)
-    return operation.response.clips
-
-
-def find_track(tracks, name: str):
-    matches = [
-        track
-        for track in tracks
-        if normalize_name(track.name) == normalize_name(name)
-    ]
-    if len(matches) != 1:
-        raise RuntimeError(
-            f"Expected one Pro Tools track named {name!r}, found "
-            f"{len(matches)}"
-        )
-    return matches[0]
-
-
-def find_source_clip(clips, source_track):
-    source_name = normalize_name(source_track.name)
-    matches = [
-        clip
-        for clip in clips
-        if normalize_name(clip.clip_full_name) == source_name
-        and clip.clip_type == pt.ClipType_Audio
-    ]
-    if len(matches) != 1:
-        names = ", ".join(clip.clip_full_name for clip in matches) or "none"
-        raise RuntimeError(
-            f"Expected one full source clip for {source_track.name!r}, found "
-            f"{len(matches)}: {names}"
-        )
-    return matches[0]
-
-
-def intervals_to_segments(
-    muted_intervals: list[dict],
-    range_end_samples: int,
-    source_end_samples: int,
-    sample_rate: int,
-) -> list[dict]:
-    segments = []
-    cursor = 0
-    for interval in muted_intervals:
-        start = seconds_to_samples(interval["start"], sample_rate)
-        end = seconds_to_samples(interval["end"], sample_rate)
-        start = max(cursor, min(range_end_samples, start))
-        end = max(start, min(range_end_samples, end))
-        if start > cursor:
-            segments.append({"start": cursor, "end": start, "muted": False})
-        if end > start:
-            segments.append({"start": start, "end": end, "muted": True})
-        cursor = end
-    if cursor < range_end_samples:
-        segments.append(
-            {"start": cursor, "end": range_end_samples, "muted": False}
-        )
-    if range_end_samples < source_end_samples:
-        if segments and not segments[-1]["muted"]:
-            segments[-1]["end"] = source_end_samples
-        else:
-            segments.append(
-                {
-                    "start": range_end_samples,
-                    "end": source_end_samples,
-                    "muted": False,
-                }
-            )
-    return [
-        segment
-        for segment in segments
-        if segment["end"] > segment["start"]
-    ]
-
-
-def create_clip_entry(
-    name: str,
-    file_id: str,
-    start_samples: int,
-    end_samples: int,
-):
-    source_channel = pt.StemChannelId(name=pt.SChannel_Mono, index=0)
-    clip_info = pt.CreateAudioClipRequestEntryClipInfo(
-        file_id=file_id,
-        src_start_point=media_position(start_samples),
-        src_end_point=media_position(end_samples),
-        src_sync_point=media_position(start_samples),
-        src_channel=source_channel,
-        dst_channel=source_channel,
-        start_point=media_position(start_samples),
-        end_point=media_position(end_samples),
-    )
-    timestamp = timeline_location(start_samples)
-    return pt.CreateAudioClipRequestEntry(
-        name=name,
-        channel_format=pt.SFormat_Mono,
-        original_timestamp=timestamp,
-        user_timestamp=timestamp,
-        clip_info=[clip_info],
-    )
-
-
-def create_segment_clips(
-    engine,
-    track_index: int,
-    file_id: str,
-    segments: list[dict],
-    batch_size: int,
-) -> list[str]:
-    clip_ids = []
-    for batch_start in range(0, len(segments), batch_size):
-        batch = segments[batch_start:batch_start + batch_size]
-        entries = [
-            create_clip_entry(
-                f"APPA_RMS_T{track_index}_{batch_start + offset + 1:04d}",
-                file_id,
-                segment["start"],
-                segment["end"],
-            )
-            for offset, segment in enumerate(batch)
-        ]
-        operation = CId_CreateAudioClips(clip_list=entries)
-        engine.client.run(operation)
-        responses = operation.response.clip_list
-        if len(responses) != len(batch):
-            raise RuntimeError(
-                f"Created {len(responses)} clip responses for "
-                f"{len(batch)} requests"
-            )
-        for response in responses:
-            if len(response.clip_ids) != 1:
-                raise RuntimeError(
-                    "Expected one mono clip ID per CreateAudioClips response"
-                )
-            clip_ids.append(response.clip_ids[0])
-        print(
-            f"  created clips {batch_start + 1}-{batch_start + len(batch)} "
-            f"of {len(segments)}",
-            flush=True,
-        )
-    return clip_ids
-
-
-def clear_track(engine, track_name: str) -> None:
-    track = find_track(engine.track_list(), track_name)
-    if track.track_attributes.contains_clips:
-        engine.select_all_clips_on_track(track.name)
-        engine.clear()
-
-
-def spot_segment(
-    engine,
-    track,
-    clip_id: str,
-    segment: dict,
-) -> None:
-    kwargs = {
-        "src_clips": [clip_id],
-        "dst_track_id": track.id,
-        "dst_location_data": pt.SpotLocationData(
-            location=timeline_location(segment["start"])
-        ),
-    }
-    if segment["muted"]:
-        kwargs["clip_instance_attributes"] = pt.ClipInstanceAttributes(
-            is_muted=pt.TB_True
-        )
-    operation = CId_SpotClipsByID(**kwargs)
-    engine.client.run(operation)
-
-
-def spot_segment_clips(
-    engine,
-    track,
-    clip_ids: list[str],
-    segments: list[dict],
-) -> None:
-    pairs = enumerate(zip(clip_ids, segments), start=1)
-    for index, (clip_id, segment) in pairs:
-        spot_segment(engine, track, clip_id, segment)
-        if index % 100 == 0 or index == len(segments):
-            print(f"  spotted clips {index} of {len(segments)}", flush=True)
-
-
-def export_track_events(engine, track_name: str) -> list[dict]:
-    engine.select_tracks_by_name([track_name], mode=pt.SM_Replace)
-    export = engine.export_session_as_text()
-    export.include_track_edls()
-    export.selected_tracks_only()
-    export.time_type("samples")
-    events = []
-    for line in export.export_string().splitlines():
-        if not line.rstrip().endswith(("Muted", "Unmuted")):
-            continue
-        columns = [column.strip() for column in line.split("\t")]
-        events.append(
-            {
-                "start": int(columns[-4]),
-                "end": int(columns[-3]),
-                "muted": columns[-1] == "Muted",
-            }
-        )
-    return events
-
-
-def verify_events(events: list[dict], segments: list[dict]) -> None:
-    if len(events) != len(segments):
-        raise RuntimeError(
-            f"EDL has {len(events)} events; expected {len(segments)}"
-        )
-    for index, (event, segment) in enumerate(zip(events, segments), start=1):
-        if event != segment:
-            raise RuntimeError(
-                f"EDL event {index} mismatch: {event!r} != {segment!r}"
-            )
 
 
 def parse_track_ids(value: str) -> list[str]:
@@ -391,7 +122,7 @@ def main() -> int:
             started_at = time.monotonic()
             clip_ids = create_segment_clips(
                 engine,
-                track_index,
+                f"T{track_index}",
                 source_clip.file_id,
                 segments,
                 args.batch_size,

@@ -5,12 +5,13 @@ from __future__ import annotations
 
 import argparse
 import json
-import math
 import subprocess
 import unicodedata
 from pathlib import Path
 
 import numpy as np
+
+from appa_rms_decode import probe_duration, stream_rms_db, stream_waveform_minmax
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -19,7 +20,7 @@ TRACK_COLORS = ["#e8c15b", "#57c1a7", "#86a8e7", "#e36b5d"]
 SESSION_ID = "miuse-full"
 SESSION_NAME = "미우새 전체 길이 프로젝트 세션"
 SESSION_SUBTITLE = "미우새 4ch 전체 세션 · full-length proxy"
-SOURCE_DIR = ROOT / "미우새"
+SOURCE_DIR = ROOT / "samples" / "미우새"
 SOURCE_PATTERNS = ["서장훈_02", "박중훈_02", "신동엽_02", "희철맘_02"]
 ACTIVITY_SAMPLE_RATE = 8000
 ACTIVITY_WINDOW_SECONDS = 0.2
@@ -29,38 +30,14 @@ ACTIVITY_ACTIVE_PERCENTILE = 95.0
 ACTIVITY_MIN_DYNAMIC_RANGE_DB = 12.0
 WAVEFORM_SAMPLE_RATE = 800
 WAVEFORM_WINDOW_SECONDS = 0.25
-INT16_MAX = 32768
 
 
 def normalize_name(value: str) -> str:
     return unicodedata.normalize("NFC", value).lower()
 
 
-def dbfs(value: float) -> float:
-    return 20.0 * math.log10(max(float(value), 1e-12))
-
-
 def web_path(path: Path) -> str:
     return "./" + path.relative_to(WEB_ROOT).as_posix()
-
-
-def probe_duration(path: Path) -> float:
-    result = subprocess.run(
-        [
-            "ffprobe",
-            "-v",
-            "error",
-            "-show_entries",
-            "format=duration",
-            "-of",
-            "default=noprint_wrappers=1:nokey=1",
-            str(path),
-        ],
-        check=True,
-        capture_output=True,
-        text=True,
-    )
-    return float(result.stdout.strip())
 
 
 def find_sources(requested_names: list[str]) -> list[Path]:
@@ -108,6 +85,8 @@ def ensure_proxy(source: Path, target: Path) -> str:
             "libmp3lame",
             "-b:a",
             "48k",
+            "-f",
+            "mp3",
             str(tmp),
         ],
         check=True,
@@ -121,43 +100,7 @@ def ensure_waveform(source: Path, target: Path) -> str:
         return "existing"
 
     target.parent.mkdir(parents=True, exist_ok=True)
-    window_samples = max(1, int(WAVEFORM_SAMPLE_RATE * WAVEFORM_WINDOW_SECONDS))
-    process = subprocess.Popen(
-        [
-            "ffmpeg",
-            "-v",
-            "error",
-            "-i",
-            str(source),
-            "-ac",
-            "1",
-            "-ar",
-            str(WAVEFORM_SAMPLE_RATE),
-            "-f",
-            "s16le",
-            "pipe:1",
-        ],
-        stdout=subprocess.PIPE,
-    )
-    if process.stdout is None:
-        raise RuntimeError("ffmpeg stdout was not available")
-
-    mins: list[float] = []
-    maxs: list[float] = []
-    window_bytes = window_samples * 2
-    while True:
-        chunk = process.stdout.read(window_bytes)
-        if not chunk:
-            break
-        samples = np.frombuffer(chunk, dtype=np.int16)
-        if samples.size == 0:
-            continue
-        mins.append(round(max(-1.0, float(np.min(samples)) / INT16_MAX), 4))
-        maxs.append(round(min(1.0, float(np.max(samples)) / INT16_MAX), 4))
-
-    return_code = process.wait()
-    if return_code != 0:
-        raise RuntimeError(f"ffmpeg failed for {source} with exit code {return_code}")
+    mins, maxs = stream_waveform_minmax(source, WAVEFORM_SAMPLE_RATE, WAVEFORM_WINDOW_SECONDS)
 
     payload = {
         "source": source.name,
@@ -169,60 +112,6 @@ def ensure_waveform(source: Path, target: Path) -> str:
     }
     target.write_text(json.dumps(payload, ensure_ascii=False, separators=(",", ":")), encoding="utf-8")
     return "generated"
-
-
-def stream_rms_db(path: Path) -> tuple[list[float], list[float]]:
-    window_samples = max(1, int(round(ACTIVITY_WINDOW_SECONDS * ACTIVITY_SAMPLE_RATE)))
-    hop_samples = max(1, int(round(ACTIVITY_HOP_SECONDS * ACTIVITY_SAMPLE_RATE)))
-    process = subprocess.Popen(
-        [
-            "ffmpeg",
-            "-v",
-            "error",
-            "-i",
-            str(path),
-            "-ac",
-            "1",
-            "-ar",
-            str(ACTIVITY_SAMPLE_RATE),
-            "-f",
-            "f32le",
-            "pipe:1",
-        ],
-        stdout=subprocess.PIPE,
-    )
-    if process.stdout is None:
-        raise RuntimeError("ffmpeg stdout was not available")
-
-    rms_values: list[float] = []
-    starts: list[float] = []
-    buffer = np.empty(0, dtype=np.float32)
-    absolute_start = 0
-    chunk_bytes = ACTIVITY_SAMPLE_RATE * 20 * 4
-
-    while True:
-        chunk = process.stdout.read(chunk_bytes)
-        if not chunk:
-            break
-        chunk_samples = np.frombuffer(chunk, dtype=np.float32)
-        if chunk_samples.size == 0:
-            continue
-        buffer = np.concatenate((buffer, chunk_samples))
-        offset = 0
-        while offset + window_samples <= buffer.size:
-            frame = buffer[offset : offset + window_samples]
-            rms = float(np.sqrt(np.mean(np.square(frame, dtype=np.float64)) + 1e-12))
-            rms_values.append(round(dbfs(rms), 2))
-            starts.append(round((absolute_start + offset) / ACTIVITY_SAMPLE_RATE, 3))
-            offset += hop_samples
-        if offset > 0:
-            buffer = buffer[offset:]
-            absolute_start += offset
-
-    return_code = process.wait()
-    if return_code != 0:
-        raise RuntimeError(f"ffmpeg failed for {path} with exit code {return_code}")
-    return rms_values, starts
 
 
 def normalize_activity_scores(rms_values: list[float]) -> tuple[list[float], dict[str, float]]:
@@ -349,8 +238,7 @@ def prepare_session(requested_names: list[str]) -> dict[str, object]:
         )
 
     analysis_dir = WEB_ROOT / "assets" / "analysis" / SESSION_ID
-    original_rms_path = analysis_dir / "original_rms.json"
-    original_rms_status = "existing" if original_rms_path.exists() and original_rms_path.stat().st_size > 0 else "not-generated"
+    original_rms_status, _activity_path, original_rms_path = ensure_analysis(tracks, analysis_dir)
     for track in tracks:
         track.pop("audioPath", None)
 
@@ -367,8 +255,7 @@ def prepare_session(requested_names: list[str]) -> dict[str, object]:
             "shortProxyBackup": "./assets/backup/miuse-27m-33m-short-proxy/",
         },
     }
-    if original_rms_status == "existing":
-        manifest["originalRmsUrl"] = web_path(original_rms_path)
+    manifest["originalRmsUrl"] = web_path(original_rms_path)
     return manifest
 
 
